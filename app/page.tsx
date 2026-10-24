@@ -23,7 +23,6 @@ import {
   FlaskConical,
   Loader2,
   Lock,
-  Map,
   RotateCcw,
   Search,
   SearchX,
@@ -55,7 +54,6 @@ import { PediatricCalculator } from "@/components/dzpharma/pediatric-calculator"
 import { UpgradeModal } from "@/components/dzpharma/upgrade-modal";
 import { AuthDialog } from "@/components/dzpharma/auth-dialog";
 import { AccountDialog } from "@/components/dzpharma/account-dialog";
-import { RoadmapDialog } from "@/components/dzpharma/roadmap-dialog";
 import { refreshAuth, useAuth } from "@/lib/auth-store";
 import { useSearchLimit } from "@/hooks/useSearchLimit";
 import type {
@@ -104,7 +102,6 @@ export default function HomePage() {
     freeLimit,
     registerSearch,
     upgradeToPremium,
-    resetForDemo,
   } = useSearchLimit();
   const auth = useAuth();
 
@@ -136,7 +133,6 @@ export default function HomePage() {
   // Account dialogs
   const [authOpen, setAuthOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [roadmapOpen, setRoadmapOpen] = useState(false);
 
   /* Boot the doctor session once (auth store is module-level). */
   useEffect(() => {
@@ -298,14 +294,6 @@ export default function HomePage() {
     },
     [toast]
   );
-
-  const handleResetDemo = useCallback(() => {
-    resetForDemo();
-    toast({
-      title: "Démo réinitialisée",
-      description: "Quota de recherches et statut Premium remis à zéro.",
-    });
-  }, [resetForDemo, toast]);
 
   /* --- Crowd-sourced rupture reporting (free) --- */
   const handleReportRupture = useCallback(
@@ -700,7 +688,11 @@ export default function HomePage() {
           </TabsContent>
 
           <TabsContent value="scores" className="mt-4">
-            <CalculatorHub onFindAlternatives={handleFindAlternativesFromTool} />
+            <CalculatorHub
+              onFindAlternatives={handleFindAlternativesFromTool}
+              isPremium={premium}
+              onUpgrade={openUpgrade}
+            />
           </TabsContent>
 
           <TabsContent value="pediatrie" className="mt-4">
@@ -721,26 +713,6 @@ export default function HomePage() {
               <span className="font-semibold text-slate-600">DzPharma Guide</span>{" "}
               — © {new Date().getFullYear()}
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setRoadmapOpen(true)}
-                className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 font-medium text-slate-400 underline-offset-2 transition-colors hover:text-slate-600 hover:underline"
-              >
-                <Map className="h-3.5 w-3.5" aria-hidden />
-                Plan de lancement (14 jours)
-              </button>
-              {hydrated && (searchesUsed > 0 || isPremium) && (
-                <button
-                  type="button"
-                  onClick={handleResetDemo}
-                  className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 font-medium text-slate-400 underline-offset-2 transition-colors hover:text-slate-600 hover:underline"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-                  Réinitialiser la démo
-                </button>
-              )}
-            </div>
           </div>
           <p className="mt-2 text-center text-[10px] leading-relaxed text-slate-400 sm:text-left">
             Outil d&apos;aide à la décision — ne remplace pas le jugement
@@ -800,8 +772,6 @@ export default function HomePage() {
       />
 
       <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} />
-
-      <RoadmapDialog open={roadmapOpen} onOpenChange={setRoadmapOpen} />
     </div>
   );
 }
