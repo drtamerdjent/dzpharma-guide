@@ -47,9 +47,11 @@ export async function GET() {
       const dcis = Array.from(unique).sort((a, b) => a.localeCompare(b, "fr"));
       cache = { dcis, count: dcis.length, source: "supabase" };
     } else {
-      // LOWER() instead of COLLATE NOCASE → valid on SQLite AND PostgreSQL
+      // GROUP BY instead of SELECT DISTINCT: PostgreSQL rejects
+      // "SELECT DISTINCT ... ORDER BY <expr not in select list>" while SQLite
+      // allows it. GROUP BY + ORDER BY LOWER(col) is valid on both engines.
       const rows = await db.$queryRaw<Array<{ dci: string }>>(Prisma.sql`
-        SELECT DISTINCT dci FROM medications ORDER BY LOWER(dci) ASC
+        SELECT dci FROM medications GROUP BY dci ORDER BY LOWER(dci) ASC
       `);
       const dcis = rows.map((row) => row.dci);
       cache = { dcis, count: dcis.length, source: "prisma" };
