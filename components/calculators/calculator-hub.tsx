@@ -22,7 +22,9 @@ import {
   Activity,
   Baby,
   Brain,
+  CheckCircle2,
   ChevronRight,
+  Crown,
   Droplets,
   Gauge,
   Heart,
@@ -34,6 +36,7 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CALCULATORS } from "@/lib/calculators";
 import type {
@@ -44,7 +47,23 @@ import { CalculatorRunner } from "./calculator-runner";
 
 interface CalculatorHubProps {
   onFindAlternatives: (dci: string, label?: string) => void;
+  isPremium: boolean;
+  onUpgrade: () => void;
 }
+
+/**
+ * Freemium : 5 scores d'urgence / quotidien gratuits (CURB-65, Centor,
+ * Glasgow, APGAR, EVA) ; les 5 scores de risque spécialistes (Wells,
+ * CHA₂DS₂-VASc, HAS-BLED, Framingham, CRB-65) sont réservés aux membres
+ * Premium (aperçu visible, calcul débloqué par l'abonnement).
+ */
+const PREMIUM_SCORE_IDS = new Set<string>([
+  "wells",
+  "cha2ds2vasc",
+  "hasbled",
+  "framingham",
+  "crb65",
+]);
 
 /** Icône reconnaissable par score (repérage visuel rapide en cabinet). */
 const SCORE_ICONS: Record<string, LucideIcon> = {
@@ -65,9 +84,11 @@ function ScoreIcon({ id }: { id: string }) {
   return <Icon className="h-4 w-4" aria-hidden />;
 }
 
-export function CalculatorHub({ onFindAlternatives }: CalculatorHubProps) {
+export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: CalculatorHubProps) {
   const [selectedId, setSelectedId] = useState<string>(CALCULATORS[0].id);
   const runnerRef = useRef<HTMLDivElement | null>(null);
+
+  const isScoreLocked = (id: string) => !isPremium && PREMIUM_SCORE_IDS.has(id);
 
   /** Scores groupés par spécialité (ordre du registre = pertinence cabinet). */
   const grouped = useMemo(() => {
@@ -118,12 +139,28 @@ export function CalculatorHub({ onFindAlternatives }: CalculatorHubProps) {
                     type="button"
                     onClick={() => selectScore(calculator.id)}
                     aria-pressed={isSelected}
-                    className={`flex h-full w-full flex-col items-start gap-1 rounded-xl border-2 p-2.5 text-left transition-all duration-200 ${
+                    aria-label={
+                      isScoreLocked(calculator.id)
+                        ? `${calculator.name} — réservé aux membres Premium`
+                        : undefined
+                    }
+                    className={`relative flex h-full w-full flex-col items-start gap-1 rounded-xl border-2 p-2.5 text-left transition-all duration-200 ${
                       isSelected
                         ? "border-sky-500 bg-sky-50 shadow-sm"
                         : "border-slate-200 bg-white hover:border-sky-200 active:bg-slate-50"
                     }`}
                   >
+                    {isScoreLocked(calculator.id) && (
+                      <span
+                        className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5"
+                        aria-hidden
+                      >
+                        <Crown className="h-2.5 w-2.5 text-amber-600" />
+                        <span className="text-[8px] font-extrabold uppercase tracking-wide text-amber-700">
+                          Pro
+                        </span>
+                      </span>
+                    )}
                     <span
                       className={`flex h-7 w-7 items-center justify-center rounded-lg ${
                         isSelected ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-500"
@@ -181,9 +218,14 @@ export function CalculatorHub({ onFindAlternatives }: CalculatorHubProps) {
                             <ScoreIcon id={calculator.id} />
                           </span>
                           <span className="min-w-0 flex-1 truncate">{calculator.name}</span>
-                          {isSelected && (
+                          {isScoreLocked(calculator.id) ? (
+                            <Crown
+                              className="h-3.5 w-3.5 shrink-0 text-amber-500"
+                              aria-label="Réservé aux membres Premium"
+                            />
+                          ) : isSelected ? (
                             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-sky-500" aria-hidden />
-                          )}
+                          ) : null}
                         </button>
                       </li>
                     );
@@ -216,7 +258,50 @@ export function CalculatorHub({ onFindAlternatives }: CalculatorHubProps) {
               </p>
             </div>
 
-            <CalculatorRunner definition={selected} onFindAlternatives={onFindAlternatives} />
+            {isScoreLocked(selected.id) ? (
+              /* --------- Score Premium verrouillé (aperçu + CTA) --------- */
+              <div className="rounded-xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white p-5 text-center">
+                <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
+                  <Crown className="h-6 w-6 text-amber-600" aria-hidden />
+                </span>
+                <p className="mt-3 text-sm font-extrabold text-slate-900">
+                  Score réservé aux membres Premium
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Débloquez <span className="font-semibold text-slate-700">{selected.name}</span> et
+                  les autres scores de risque spécialistes pour affiner vos
+                  décisions thérapeutiques.
+                </p>
+                <ul className="mx-auto mt-3 max-w-xs list-none space-y-1 text-left">
+                  {["Les 10 scores cliniques sans limite", "Outil d'aide à la décision au complet", "Activation en 24 h via BaridiMob"].map(
+                    (benefit) => (
+                      <li
+                        key={benefit}
+                        className="flex items-start gap-1.5 text-xs text-slate-600"
+                      >
+                        <CheckCircle2
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
+                          aria-hidden
+                        />
+                        {benefit}
+                      </li>
+                    )
+                  )}
+                </ul>
+                <Button
+                  onClick={onUpgrade}
+                  className="mt-4 h-11 w-full gap-2 bg-amber-500 text-base font-bold text-white hover:bg-amber-600"
+                >
+                  <Crown className="h-4 w-4" aria-hidden />
+                  Débloquer avec Premium — 3 600 DZD / an
+                </Button>
+                <p className="mt-2 text-[10px] text-slate-400">
+                  Paiement BaridiMob • Activation rapide via WhatsApp
+                </p>
+              </div>
+            ) : (
+              <CalculatorRunner definition={selected} onFindAlternatives={onFindAlternatives} />
+            )}
           </Card>
         </div>
       </div>
