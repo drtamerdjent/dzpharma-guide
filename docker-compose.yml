@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# DzPharma Guide — déploiement VPS en une commande :
+#     docker compose up -d --build
+#
+# La base SQLite vit dans le volume nommé « dzpharma-db » → persiste aux
+# redéploiements. Sauvegarde :
+#     docker run --rm -v dzpharma-db:/data -v "$PWD":/backup alpine \
+#       cp /data/custom.db /backup/custom.db.$(date +%F)
+# ---------------------------------------------------------------------------
+
+services:
+  app:
+    build: .
+    image: dzpharma-guide
+    container_name: dzpharma-guide
+    restart: unless-stopped
+    ports:
+      - "3000:3000" # derrière un reverse-proxy/Tunnel, sinon exposer directement
+    environment:
+      DATABASE_URL: file:/app/db/custom.db
+
+      # --- Supabase (optionnel — recommandé en prod pour les médicaments) ---
+      # SUPABASE_URL: https://votre-projet.supabase.co
+      # SUPABASE_ANON_KEY: votre-cle-anon
+
+      # --- Bot Telegram « DzPharma Express » (optionnel) ---
+      # TELEGRAM_BOT_TOKEN: "123456789:AA..."
+      # TELEGRAM_WEBHOOK_SECRET: une-chaine-aleatoire
+      # TELEGRAM_SETUP_SECRET: une-autre-chaine-aleatoire
+      # NEXT_PUBLIC_APP_URL: https://votre-domaine.dz
+
+      # --- WhatsApp (défaut déjà correct : support 0672 22 66 98) ---
+      # WHATSAPP_NUMBER: "213672226698"
+
+      # --- Démo uniquement — NE JAMAIS activer en production ---
+      # PAYMENTS_DEMO_MODE: "true"
+      # NEXT_PUBLIC_PAYMENTS_DEMO_MODE: "true"
+
+      # --- Données de démo ruptures au premier lancement ---
+      # SEED_DEMO_REPORTS: "true"
+
+    volumes:
+      - dzpharma-db:/app/db
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/medications/stats').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1));",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  dzpharma-db:

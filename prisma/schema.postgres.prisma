@@ -1,0 +1,133 @@
+// DzPharma Guide — Prisma schema PRODUCTION (PostgreSQL : Supabase, Neon, Vercel Postgres…)
+//
+// Ce schéma est utilisé UNIQUEMENT pour :
+//   1. générer le client Prisma « postgres » lors du build Vercel
+//      (voir buildCommand dans vercel.json) ;
+//   2. créer les tables dans la base cloud :   bun run db:push:pg
+//   3. importer les 5 380 médicaments :        bun run generate:pg
+//                                              bun scripts/seed-medications.ts
+//
+// Le développement local (sandbox / preview) continue d'utiliser le schéma
+// SQLite par défaut (prisma/schema.prisma). Après un seed sur la base cloud,
+// restaurer le client de dev avec :  bun run db:generate
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Connexion directe (non poolée) réservée aux migrations / db push :
+  //  - Supabase        → chaîne « Session pooler » (port 5432, compatible IPv4)
+  //  - Neon/Vercel PG  → chaîne « unpooled » (DIRECT_URL fournie automatiquement)
+  directUrl = env("DIRECT_URL")
+}
+
+model Medication {
+  id                    String   @id
+  dci                   String
+  nom_commercial        String
+  laboratoire           String
+  forme_galenique       String
+  dosage                String
+  prix_approximatif_dzd Float?
+  taux_cnas             Int      @default(0)
+  is_available          Boolean  @default(true)
+  created_at            DateTime @default(now())
+
+  @@index([dci])
+  @@index([nom_commercial])
+  @@map("medications")
+}
+
+// Crowd-sourced shortage reports ("Signaler une rupture").
+model ShortageReport {
+  id            String   @id @default(cuid())
+  medication_id String
+  reporter      String   @default("Contributeur anonyme")
+  note          String?
+  reported_at   DateTime @default(now())
+
+  @@index([medication_id])
+  @@index([reported_at])
+  @@map("shortage_reports")
+}
+
+// Doctor accounts (comptes médecins). Premium is attached to the account,
+// not to the browser — payments (BaridiMob → WhatsApp) activate it server-side.
+model Doctor {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  fullName      String
+  specialty     String?
+  phone         String?
+  isPremium     Boolean   @default(false)
+  premiumSource String?
+  premiumUntil  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions DoctorSession[]
+  payments PaymentRequest[]
+
+  @@map("doctors")
+}
+
+// One session per device. Business rule: a doctor may stay logged in on
+// AT MOST 2 devices simultaneously (anti credential-sharing, per the
+// business plan). A 3rd device must sign out other devices first.
+model DoctorSession {
+  id                String   @id @default(cuid())
+  token             String   @unique
+  doctorId          String
+  deviceFingerprint String
+  deviceLabel       String
+  createdAt         DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, deviceFingerprint])
+  @@index([doctorId])
+  @@map("doctor_sessions")
+}
+
+// BaridiMob transfer -> WhatsApp proof -> manual activation (<= 1 h).
+model PaymentRequest {
+  id          String    @id @default(cuid())
+  reference   String    @unique
+  doctorId    String
+  method      String    @default("BARIDIMOB")
+  amountDzd   Float     @default(3600)
+  senderName  String
+  senderPhone String
+  // PENDING | ACTIVATED | REJECTED
+  status      String    @default("PENDING")
+  note        String?
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId])
+  @@map("payment_requests")
+}
+
+// Telegram bot users ("DzPharma Express").
+model TelegramUser {
+  id             String   @id @default(cuid())
+  telegramId     String   @unique
+  firstName      String?
+  username       String?
+  // FREE | PREMIUM
+  plan           String   @default("FREE")
+  searchesToday  Int      @default(0)
+  // "YYYY-MM-DD" (local server day of the last search)
+  lastSearchDate String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("telegram_users")
+}

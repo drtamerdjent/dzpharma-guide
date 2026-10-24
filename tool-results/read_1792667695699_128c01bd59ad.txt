@@ -1,0 +1,739 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * DzPharma Guide — main page.
+     5→ * Mobile-first search experience over the Algerian medications database:
+     6→ *  - Debounced search on DCI + nom commercial (server API route).
+     7→ *  - Availability filter (is_available = true by default).
+     8→ *  - Freemium: 3 free searches/day, then price + CNAS are blurred.
+     9→ *  - Alternatives thérapeutiques (same molecule, ranked) — 2 free, all Premium.
+    10→ *  - Crowd-sourced rupture reports + alerts feed ("Top Contributeur du Mois").
+    11→ *  - Premium tools: printable prescription pad + pediatric dosage calculator.
+    12→ *  - Doctor accounts (2 devices max) — Premium can live on the account and
+    13→ *    be activated through the BaridiMob → WhatsApp flow.
+    14→ */
+    15→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+    16→import {
+    17→  AlertTriangle,
+    18→  Baby,
+    19→  Bell,
+    20→  Crown,
+    21→  Database,
+    22→  FlaskConical,
+    23→  Loader2,
+    24→  Lock,
+    25→  Map,
+    26→  RotateCcw,
+    27→  SearchX,
+    28→  ShieldPlus,
+    29→  Stethoscope,
+    30→  UserRound,
+    31→  UserRoundPlus,
+    32→} from "lucide-react";
+    33→import { Badge } from "@/components/ui/badge";
+    34→import { Button } from "@/components/ui/button";
+    35→import { Card } from "@/components/ui/card";
+    36→import { Label } from "@/components/ui/label";
+    37→import { Skeleton } from "@/components/ui/skeleton";
+    38→import { Switch } from "@/components/ui/switch";
+    39→import { useToast } from "@/hooks/use-toast";
+    40→import {
+    41→  MedicationCard,
+    42→  MedicationCardSkeleton,
+    43→} from "@/components/dzpharma/medication-card";
+    44→import { SearchBar } from "@/components/dzpharma/search-bar";
+    45→import { AlternativesDialog } from "@/components/dzpharma/alternatives-dialog";
+    46→import { RuptureDialog } from "@/components/dzpharma/rupture-dialog";
+    47→import { PrescriptionDialog } from "@/components/dzpharma/prescription-dialog";
+    48→import { PediatricCalculator } from "@/components/dzpharma/pediatric-calculator";
+    49→import { UpgradeModal } from "@/components/dzpharma/upgrade-modal";
+    50→import { AuthDialog } from "@/components/dzpharma/auth-dialog";
+    51→import { AccountDialog } from "@/components/dzpharma/account-dialog";
+    52→import { RoadmapDialog } from "@/components/dzpharma/roadmap-dialog";
+    53→import { refreshAuth, useAuth } from "@/lib/auth-store";
+    54→import { useSearchLimit } from "@/hooks/useSearchLimit";
+    55→import type {
+    56→  DatabaseStats,
+    57→  Medication,
+    58→  MedicationMeta,
+    59→  SearchResponse,
+    60→} from "@/lib/types";
+    61→
+    62→const PAGE_SIZE = 30;
+    63→
+    64→const SUGGESTIONS = [
+    65→  "PARACETAMOL",
+    66→  "AMOXICILLINE",
+    67→  "OMEPRAZOLE",
+    68→  "METFORMINE",
+    69→  "INSULINE",
+    70→  "SALBUTAMOL",
+    71→];
+    72→
+    73→const HANDLE_KEY = "dzpharma:handle";
+    74→
+    75→function getContributorHandle(): string {
+    76→  if (typeof window === "undefined") return "Contributeur anonyme";
+    77→  try {
+    78→    let handle = window.localStorage.getItem(HANDLE_KEY);
+    79→    if (!handle) {
+    80→      handle = `Contributeur #${Math.floor(1000 + Math.random() * 9000)}`;
+    81→      window.localStorage.setItem(HANDLE_KEY, handle);
+    82→    }
+    83→    return handle;
+    84→  } catch {
+    85→    return "Contributeur anonyme";
+    86→  }
+    87→}
+    88→
+    89→type Status = "idle" | "loading" | "ready" | "error";
+    90→
+    91→export default function HomePage() {
+    92→  const { toast } = useToast();
+    93→  const {
+    94→    hydrated,
+    95→    isPremium,
+    96→    searchesUsed,
+    97→    remaining,
+    98→    freeLimit,
+    99→    registerSearch,
+   100→    upgradeToPremium,
+   101→    resetForDemo,
+   102→  } = useSearchLimit();
+   103→  const auth = useAuth();
+   104→
+   105→  /* Merged Premium: account Premium (BaridiMob activated) OR local demo. */
+   106→  const serverPremium = auth.status === "authed" && !!auth.doctor?.isPremium;
+   107→  const premium = isPremium || serverPremium;
+   108→  const locked = hydrated && !premium && searchesUsed >= freeLimit;
+   109→
+   110→  const [rawQuery, setRawQuery] = useState("");
+   111→  const [query, setQuery] = useState("");
+   112→  const [availableOnly, setAvailableOnly] = useState(true);
+   113→  const [status, setStatus] = useState<Status>("idle");
+   114→  const [loadingMore, setLoadingMore] = useState(false);
+   115→  const [items, setItems] = useState<Medication[]>([]);
+   116→  const [meta, setMeta] = useState<Record<string, MedicationMeta>>({});
+   117→  const [total, setTotal] = useState(0);
+   118→  const [hasMore, setHasMore] = useState(false);
+   119→  const [dataSource, setDataSource] = useState<"supabase" | "sqlite">("sqlite");
+   120→  const [stats, setStats] = useState<DatabaseStats | null>(null);
+   121→  const [upgradeOpen, setUpgradeOpen] = useState(false);
+   122→  const [retryTick, setRetryTick] = useState(0);
+   123→  const abortRef = useRef<AbortController | null>(null);
+   124→
+   125→  // Feature dialogs
+   126→  const [alternativesMed, setAlternativesMed] = useState<Medication | null>(null);
+   127→  const [prescriptionMed, setPrescriptionMed] = useState<Medication | null>(null);
+   128→  const [ruptureOpen, setRuptureOpen] = useState(false);
+   129→  const [calculatorOpen, setCalculatorOpen] = useState(false);
+   130→
+   131→  // Account dialogs
+   132→  const [authOpen, setAuthOpen] = useState(false);
+   133→  const [accountOpen, setAccountOpen] = useState(false);
+   134→  const [roadmapOpen, setRoadmapOpen] = useState(false);
+   135→
+   136→  /* Boot the doctor session once (auth store is module-level). */
+   137→  useEffect(() => {
+   138→    void refreshAuth();
+   139→  }, []);
+   140→
+   141→  // Community stats (header badge)
+   142→  const [ruptureWeek, setRuptureWeek] = useState<number | null>(null);
+   143→
+   144→  /* --- Debounce the raw input into the committed query (300 ms) --- */
+   145→  useEffect(() => {
+   146→    const timer = window.setTimeout(() => setQuery(rawQuery.trim()), 300);
+   147→    return () => window.clearTimeout(timer);
+   148→  }, [rawQuery]);
+   149→
+   150→  /* --- Dataset stats + community rupture badge --- */
+   151→  useEffect(() => {
+   152→    let cancelled = false;
+   153→    fetch("/api/medications/stats")
+   154→      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+   155→      .then((data: DatabaseStats) => {
+   156→        if (!cancelled) setStats(data);
+   157→      })
+   158→      .catch(() => {
+   159→        /* stats are decorative — silently ignore */
+   160→      });
+   161→    fetch("/api/reports/summary")
+   162→      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+   163→      .then((data: { last7Days: number }) => {
+   164→        if (!cancelled) setRuptureWeek(data.last7Days);
+   165→      })
+   166→      .catch(() => {
+   167→        /* decorative */
+   168→      });
+   169→    return () => {
+   170→      cancelled = true;
+   171→    };
+   172→  }, []);
+   173→
+   174→  /* --- Main search effect --- */
+   175→  useEffect(() => {
+   176→    abortRef.current?.abort();
+   177→
+   178→    if (!query) {
+   179→      setStatus("idle");
+   180→      setItems([]);
+   181→      setMeta({});
+   182→      setTotal(0);
+   183→      setHasMore(false);
+   184→      return;
+   185→    }
+   186→
+   187→    const controller = new AbortController();
+   188→    abortRef.current = controller;
+   189→    setStatus("loading");
+   190→
+   191→    const params = new URLSearchParams({
+   192→      q: query,
+   193→      availableOnly: String(availableOnly),
+   194→      limit: String(PAGE_SIZE),
+   195→      offset: "0",
+   196→    });
+   197→
+   198→    fetch(`/api/medications/search?${params.toString()}`, {
+   199→      signal: controller.signal,
+   200→    })
+   201→      .then(async (res) => {
+   202→        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+   203→        return (await res.json()) as SearchResponse;
+   204→      })
+   205→      .then((data) => {
+   206→        registerSearch(query);
+   207→        setItems(data.items);
+   208→        setMeta(data.meta ?? {});
+   209→        setTotal(data.total);
+   210→        setHasMore(data.hasMore);
+   211→        setDataSource(data.source);
+   212→        setStatus("ready");
+   213→      })
+   214→      .catch((error: unknown) => {
+   215→        if (error instanceof DOMException && error.name === "AbortError") return;
+   216→        setStatus("error");
+   217→      });
+   218→
+   219→    return () => controller.abort();
+   220→  }, [query, availableOnly, retryTick, registerSearch]);
+   221→
+   222→  /* --- Load more (append next page) --- */
+   223→  const loadMore = useCallback(async () => {
+   224→    if (loadingMore || !hasMore) return;
+   225→    setLoadingMore(true);
+   226→    try {
+   227→      const params = new URLSearchParams({
+   228→        q: query,
+   229→        availableOnly: String(availableOnly),
+   230→        limit: String(PAGE_SIZE),
+   231→        offset: String(items.length),
+   232→      });
+   233→      const res = await fetch(`/api/medications/search?${params.toString()}`);
+   234→      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+   235→      const data = (await res.json()) as SearchResponse;
+   236→      setItems((prev) => [...prev, ...data.items]);
+   237→      setMeta((prev) => ({ ...prev, ...(data.meta ?? {}) }));
+   238→      setTotal(data.total);
+   239→      setHasMore(data.hasMore);
+   240→    } catch {
+   241→      toast({
+   242→        title: "Erreur de chargement",
+   243→        description: "Impossible de charger la suite des résultats.",
+   244→        variant: "destructive",
+   245→      });
+   246→    } finally {
+   247→      setLoadingMore(false);
+   248→    }
+   249→  }, [availableOnly, hasMore, items.length, loadingMore, query, toast]);
+   250→
+   251→  const openUpgrade = useCallback(() => setUpgradeOpen(true), []);
+   252→
+   253→  const handleUpgraded = useCallback(() => {
+   254→    upgradeToPremium();
+   255→  }, [upgradeToPremium]);
+   256→
+   257→  const handleResetDemo = useCallback(() => {
+   258→    resetForDemo();
+   259→    toast({
+   260→      title: "Démo réinitialisée",
+   261→      description: "Quota de recherches et statut Premium remis à zéro.",
+   262→    });
+   263→  }, [resetForDemo, toast]);
+   264→
+   265→  /* --- Crowd-sourced rupture reporting (free) --- */
+   266→  const handleReportRupture = useCallback(
+   267→    async (medication: Medication) => {
+   268→      // Doctors get credited by name once logged in (leaderboard).
+   269→      const handle = auth.doctor?.fullName ?? getContributorHandle();
+   270→      try {
+   271→        const res = await fetch("/api/reports", {
+   272→          method: "POST",
+   273→          headers: { "Content-Type": "application/json" },
+   274→          body: JSON.stringify({ medicationId: medication.id, reporter: handle }),
+   275→        });
+   276→        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+   277→        setMeta((prev) => ({
+   278→          ...prev,
+   279→          [medication.id]: {
+   280→            altCount: prev[medication.id]?.altCount ?? 0,
+   281→            ruptureCount: (prev[medication.id]?.ruptureCount ?? 0) + 1,
+   282→          },
+   283→        }));
+   284→        setRuptureWeek((prev) => (prev == null ? 1 : prev + 1));
+   285→        toast({
+   286→          title: "Merci pour votre contribution !",
+   287→          description: auth.doctor?.fullName
+   288→            ? "Rupture signalée au nom de votre compte médecin. Merci !"
+   289→            : `Rupture signalée sous « ${handle} ». La communauté vous remercie.`,
+   290→        });
+   291→      } catch {
+   292→        toast({
+   293→          title: "Signalement impossible",
+   294→          description: "Une erreur est survenue. Réessayez dans un instant.",
+   295→          variant: "destructive",
+   296→        });
+   297→      }
+   298→    },
+   299→    [auth.doctor, toast]
+   300→  );
+   301→
+   302→  const formattedTotal = useMemo(
+   303→    () => new Intl.NumberFormat("fr-FR").format(total),
+   304→    [total]
+   305→  );
+   306→
+   307→  return (
+   308→    <div className="flex min-h-dvh flex-col bg-background">
+   309→      {/* ---------------- Header ---------------- */}
+   310→      <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur-md">
+   311→        <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-2 px-4">
+   312→          <div className="flex items-center gap-3">
+   313→            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white shadow-sm">
+   314→              <Stethoscope className="h-5 w-5" aria-hidden />
+   315→            </span>
+   316→            <div className="leading-tight">
+   317→              <p className="text-base font-extrabold tracking-tight text-slate-900">
+   318→                DzPharma <span className="text-primary">Guide</span>
+   319→              </p>
+   320→              <p className="hidden text-[11px] text-slate-500 sm:block">
+   321→                Répertoire des médicaments — Algérie
+   322→              </p>
+   323→            </div>
+   324→          </div>
+   325→
+   326→          <div className="flex items-center gap-1.5">
+   327→            {/* Alerts ruptures */}
+   328→            <button
+   329→              type="button"
+   330→              onClick={() => setRuptureOpen(true)}
+   331→              aria-label="Alertes ruptures de la communauté"
+   332→              title="Alertes ruptures"
+   333→              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-amber-50 hover:text-amber-700"
+   334→            >
+   335→              <Bell className="h-5 w-5" aria-hidden />
+   336→              {ruptureWeek != null && ruptureWeek > 0 && (
+   337→                <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+   338→                  {ruptureWeek > 9 ? "9+" : ruptureWeek}
+   339→                </span>
+   340→              )}
+   341→            </button>
+   342→            {/* Calculatrice pédiatrique */}
+   343→            <button
+   344→              type="button"
+   345→              onClick={() => setCalculatorOpen(true)}
+   346→              aria-label="Calculatrice posologique pédiatrique"
+   347→              title="Calculatrice pédiatrique"
+   348→              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700"
+   349→            >
+   350→              <Baby className="h-5 w-5" aria-hidden />
+   351→            </button>
+   352→            {/* Compte médecin / Espace médecin */}
+   353→            {auth.status === "loading" ? (
+   354→              <Skeleton className="h-10 w-10 rounded-xl" aria-hidden />
+   355→            ) : auth.status === "authed" && auth.doctor ? (
+   356→              <button
+   357→                type="button"
+   358→                onClick={() => setAccountOpen(true)}
+   359→                aria-label="Mon compte médecin"
+   360→                className="flex h-10 max-w-40 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+   361→              >
+   362→                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[10px] font-bold text-sky-700">
+   363→                  {auth.doctor.fullName
+   364→                    .replace(/^Dr\.?\s*/i, "")
+   365→                    .split(" ")
+   366→                    .slice(0, 2)
+   367→                    .map((part) => part.charAt(0).toUpperCase())
+   368→                    .join("")}
+   369→                </span>
+   370→                <span className="truncate">
+   371→                  Dr {auth.doctor.fullName.replace(/^Dr\.?\s*/i, "").split(" ")[0]}
+   372→                </span>
+   373→                {serverPremium && <Crown className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />}
+   374→              </button>
+   375→            ) : (
+   376→              <button
+   377→                type="button"
+   378→                onClick={() => setAuthOpen(true)}
+   379→                aria-label="Espace médecin — connexion ou inscription"
+   380→                className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+   381→              >
+   382→                <UserRoundPlus className="h-4 w-4" aria-hidden />
+   383→                <span className="hidden xs:inline sm:inline">Espace médecin</span>
+   384→              </button>
+   385→            )}
+   386→            {hydrated &&
+   387→              (premium ? (
+   388→                <Badge className="gap-1 border-amber-300 bg-amber-100 text-amber-800">
+   389→                  <Crown className="h-3.5 w-3.5" aria-hidden />
+   390→                  PREMIUM
+   391→                </Badge>
+   392→              ) : (
+   393→                <button
+   394→                  type="button"
+   395→                  onClick={openUpgrade}
+   396→                  aria-label="Passer à Premium — 3 600 DZD par an"
+   397→                  className="flex h-10 items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-2.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100"
+   398→                >
+   399→                  <ShieldPlus className="h-4 w-4" aria-hidden />
+   400→                  <span className="hidden xs:inline sm:inline">Passer Premium</span>
+   401→                </button>
+   402→              ))}
+   403→          </div>
+   404→        </div>
+   405→      </header>
+   406→
+   407→      {/* ---------------- Main ---------------- */}
+   408→      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pb-10 pt-5 sm:pt-8">
+   409→        {/* Hero / search zone */}
+   410→        <section aria-labelledby="search-heading" className="space-y-4">
+   411→          <div className="space-y-1.5 text-center sm:text-left">
+   412→            <h1
+   413→              id="search-heading"
+   414→              className="text-xl font-extrabold tracking-tight text-slate-900 sm:text-2xl"
+   415→            >
+   416→              Trouvez la bonne alternative thérapeutique
+   417→            </h1>
+   418→            <div className="text-sm text-slate-500">
+   419→              {stats ? (
+   420→                <>
+   421→                  <span className="font-semibold text-slate-700">
+   422→                    {new Intl.NumberFormat("fr-FR").format(stats.total)}
+   423→                  </span>{" "}
+   424→                  médicaments référencés en Algérie — recherchez par DCI ou nom
+   425→                  commercial.
+   426→                </>
+   427→              ) : (
+   428→                <Skeleton className="h-4 w-72 max-w-full" />
+   429→              )}
+   430→            </div>
+   431→          </div>
+   432→
+   433→          <SearchBar
+   434→            value={rawQuery}
+   435→            onChange={setRawQuery}
+   436→            loading={status === "loading"}
+   437→          />
+   438→
+   439→          {/* Availability filter */}
+   440→          <div className="flex flex-wrap items-center justify-between gap-3">
+   441→            <div className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-200 bg-white px-3">
+   442→              <Switch
+   443→                id="available-only"
+   444→                checked={availableOnly}
+   445→                onCheckedChange={setAvailableOnly}
+   446→                aria-label="Afficher uniquement les médicaments disponibles"
+   447→              />
+   448→              <Label
+   449→                htmlFor="available-only"
+   450→                className="cursor-pointer text-sm font-medium text-slate-700"
+   451→              >
+   452→                Disponibles uniquement
+   453→              </Label>
+   454→            </div>
+   455→
+   456→            {hydrated && !premium && (
+   457→              <span className="flex min-h-11 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500">
+   458→                <FlaskConical className="h-4 w-4 text-sky-500" aria-hidden />
+   459→                {locked ? (
+   460→                  <span>Quota gratuit atteint ({freeLimit}/{freeLimit})</span>
+   461→                ) : (
+   462→                  <span>
+   463→                    Recherches gratuites :{" "}
+   464→                    <span className="font-bold text-sky-700">
+   465→                      {remaining}/{freeLimit}
+   466→                    </span>{" "}
+   467→                    restantes
+   468→                    {auth.status === "authed" ? " · compte" : ""}
+   469→                  </span>
+   470→                )}
+   471→              </span>
+   472→            )}
+   473→          </div>
+   474→        </section>
+   475→
+   476→        {/* Freemium banner */}
+   477→        {hydrated && locked && query && (
+   478→          <Card className="mt-4 border-amber-200 bg-gradient-to-br from-amber-50 to-white p-4">
+   479→            <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+   480→              <div className="flex items-start gap-2.5">
+   481→                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100">
+   482→                  <Lock className="h-4.5 w-4.5 text-amber-700" aria-hidden />
+   483→                </span>
+   484→                <p className="text-sm leading-snug text-slate-700">
+   485→                  <span className="font-bold text-slate-900">
+   486→                    Vous avez utilisé vos {freeLimit} recherches gratuites du
+   487→                    jour.
+   488→                  </span>{" "}
+   489→                  Passez à Premium (3 600 DZD/an) pour un accès illimité aux prix
+   490→                  et remboursements CNAS.
+   491→                </p>
+   492→              </div>
+   493→              <Button
+   494→                onClick={openUpgrade}
+   495→                className="h-11 w-full shrink-0 gap-2 font-semibold sm:w-auto"
+   496→              >
+   497→                <Crown className="h-4 w-4" aria-hidden />
+   498→                Passer à Premium
+   499→              </Button>
+   500→            </div>
+   501→          </Card>
+   502→        )}
+   503→
+   504→        {/* Results / states */}
+   505→        <section aria-live="polite" className="mt-5">
+   506→          {status === "idle" && (
+   507→            <div className="space-y-4 pt-2">
+   508→              <p className="text-sm font-medium text-slate-600">
+   509→                Recherches populaires :
+   510→              </p>
+   511→              <div className="flex flex-wrap gap-2">
+   512→                {SUGGESTIONS.map((suggestion) => (
+   513→                  <button
+   514→                    key={suggestion}
+   515→                    type="button"
+   516→                    onClick={() => setRawQuery(suggestion)}
+   517→                    className="min-h-10 rounded-full border border-sky-200 bg-white px-4 text-sm font-medium text-sky-700 shadow-sm transition-colors hover:bg-sky-50 active:bg-sky-100"
+   518→                  >
+   519→                    {suggestion}
+   520→                  </button>
+   521→                ))}
+   522→              </div>
+   523→              <div className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-white/60 p-6 text-sm text-slate-400">
+   524→                <Database className="h-4 w-4" aria-hidden />
+   525→                {stats
+   526→                  ? `${new Intl.NumberFormat("fr-FR").format(stats.available)} médicaments disponibles — ${new Intl.NumberFormat("fr-FR").format(stats.withPrice)} avec prix renseigné`
+   527→                  : "Chargement de la base…"}
+   528→              </div>
+   529→            </div>
+   530→          )}
+   531→
+   532→          {status === "loading" && (
+   533→            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   534→              {Array.from({ length: 6 }).map((_, index) => (
+   535→                <MedicationCardSkeleton key={index} />
+   536→              ))}
+   537→            </div>
+   538→          )}
+   539→
+   540→          {status === "error" && (
+   541→            <Card className="mx-auto max-w-md border-red-200 bg-red-50/60 p-6 text-center">
+   542→              <AlertTriangle
+   543→                className="mx-auto h-8 w-8 text-red-500"
+   544→                aria-hidden
+   545→              />
+   546→              <p className="mt-2 font-semibold text-slate-900">
+   547→                Une erreur est survenue
+   548→              </p>
+   549→              <p className="mt-1 text-sm text-slate-500">
+   550→                La recherche n&apos;a pas abouti. Vérifiez votre connexion puis
+   551→                réessayez.
+   552→              </p>
+   553→              <Button
+   554→                onClick={() => setRetryTick((tick) => tick + 1)}
+   555→                className="mt-4 h-11"
+   556→                variant="destructive"
+   557→              >
+   558→                <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
+   559→                Réessayer
+   560→              </Button>
+   561→            </Card>
+   562→          )}
+   563→
+   564→          {status === "ready" && items.length === 0 && (
+   565→            <Card className="mx-auto max-w-md p-8 text-center">
+   566→              <SearchX className="mx-auto h-10 w-10 text-slate-300" aria-hidden />
+   567→              <p className="mt-3 font-semibold text-slate-900">
+   568→                Aucun médicament trouvé
+   569→              </p>
+   570→              <p className="mt-1 text-sm text-slate-500">
+   571→                Aucun résultat pour «&nbsp;{query}&nbsp;».
+   572→                {availableOnly &&
+   573→                  " Certains médicaments sont masqués par le filtre « disponibles uniquement »."}
+   574→              </p>
+   575→              {availableOnly && (
+   576→                <Button
+   577→                  variant="outline"
+   578→                  className="mt-4 h-11"
+   579→                  onClick={() => setAvailableOnly(false)}
+   580→                >
+   581→                  Inclure les indisponibles
+   582→                </Button>
+   583→              )}
+   584→            </Card>
+   585→          )}
+   586→
+   587→          {status === "ready" && items.length > 0 && (
+   588→            <>
+   589→              <p className="mb-3 text-sm text-slate-500">
+   590→                <span className="font-bold text-slate-900">{formattedTotal}</span>{" "}
+   591→                résultat{total > 1 ? "s" : ""} pour «&nbsp;{query}&nbsp;»
+   592→                <span className="ml-2 hidden text-xs text-slate-400 sm:inline">
+   593→                  (source : {dataSource === "supabase" ? "Supabase" : "miroir local SQLite"})
+   594→                </span>
+   595→              </p>
+   596→              <ul className="grid list-none grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   597→                {items.map((medication) => (
+   598→                  <li
+   599→                    key={medication.id}
+   600→                    className="animate-in fade-in slide-in-from-bottom-1 duration-300"
+   601→                  >
+   602→                    <MedicationCard
+   603→                      medication={medication}
+   604→                      meta={meta[medication.id]}
+   605→                      locked={locked}
+   606→                      isPremium={premium}
+   607→                      onUpgrade={openUpgrade}
+   608→                      onShowAlternatives={setAlternativesMed}
+   609→                      onReportRupture={handleReportRupture}
+   610→                      onPrescription={setPrescriptionMed}
+   611→                    />
+   612→                  </li>
+   613→                ))}
+   614→              </ul>
+   615→              {hasMore && (
+   616→                <div className="mt-5 flex justify-center">
+   617→                  <Button
+   618→                    variant="outline"
+   619→                    size="lg"
+   620→                    className="h-12 min-w-56 bg-white"
+   621→                    onClick={loadMore}
+   622→                    disabled={loadingMore}
+   623→                  >
+   624→                    {loadingMore ? (
+   625→                      <>
+   626→                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+   627→                        Chargement…
+   628→                      </>
+   629→                    ) : (
+   630→                      "Charger plus de résultats"
+   631→                    )}
+   632→                  </Button>
+   633→                </div>
+   634→              )}
+   635→            </>
+   636→          )}
+   637→        </section>
+   638→      </main>
+   639→
+   640→      {/* ---------------- Footer (sticky bottom via flex layout) ---------------- */}
+   641→      <footer className="mt-auto border-t border-slate-200 bg-white">
+   642→        <div className="mx-auto w-full max-w-5xl px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+   643→          <div className="flex flex-col items-center justify-between gap-2 text-xs text-slate-400 sm:flex-row">
+   644→            <p className="text-center sm:text-left">
+   645→              <span className="font-semibold text-slate-600">DzPharma Guide</span>{" "}
+   646→              — © {new Date().getFullYear()}
+   647→            </p>
+   648→            <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-end">
+   649→              <button
+   650→                type="button"
+   651→                onClick={() => setRoadmapOpen(true)}
+   652→                className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 font-medium text-slate-400 underline-offset-2 transition-colors hover:text-slate-600 hover:underline"
+   653→              >
+   654→                <Map className="h-3.5 w-3.5" aria-hidden />
+   655→                Plan de lancement (14 jours)
+   656→              </button>
+   657→              {hydrated && (searchesUsed > 0 || isPremium) && (
+   658→                <button
+   659→                  type="button"
+   660→                  onClick={handleResetDemo}
+   661→                  className="flex min-h-9 items-center gap-1.5 rounded-lg px-2 font-medium text-slate-400 underline-offset-2 transition-colors hover:text-slate-600 hover:underline"
+   662→                >
+   663→                  <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+   664→                  Réinitialiser la démo
+   665→                </button>
+   666→              )}
+   667→            </div>
+   668→          </div>
+   669→          <p className="mt-2 text-center text-[10px] leading-relaxed text-slate-400 sm:text-left">
+   670→            Outil d&apos;aide à la décision — ne remplace pas le jugement
+   671→            clinique : le médecin prescripteur conserve l&apos;entière
+   672→            responsabilité. Les disponibilités sont basées sur les dernières
+   673→            données connues. Veuillez confirmer avec votre pharmacien.
+   674→          </p>
+   675→        </div>
+   676→      </footer>
+   677→
+   678→      {/* ---------------- Feature dialogs ---------------- */}
+   679→      <AlternativesDialog
+   680→        medication={alternativesMed}
+   681→        open={alternativesMed != null}
+   682→        onOpenChange={(open) => {
+   683→          if (!open) setAlternativesMed(null);
+   684→        }}
+   685→        isPremium={premium}
+   686→        onUpgrade={openUpgrade}
+   687→        onPrescription={setPrescriptionMed}
+   688→      />
+   689→
+   690→      <RuptureDialog
+   691→        open={ruptureOpen}
+   692→        onOpenChange={setRuptureOpen}
+   693→        isPremium={premium}
+   694→        onUpgrade={openUpgrade}
+   695→      />
+   696→
+   697→      <PrescriptionDialog
+   698→        open={prescriptionMed != null}
+   699→        onOpenChange={(open) => {
+   700→          if (!open) setPrescriptionMed(null);
+   701→        }}
+   702→        medication={prescriptionMed}
+   703→        isPremium={premium}
+   704→        onUpgradeNeeded={openUpgrade}
+   705→      />
+   706→
+   707→      <PediatricCalculator
+   708→        open={calculatorOpen}
+   709→        onOpenChange={setCalculatorOpen}
+   710→        isPremium={premium}
+   711→        onUpgradeNeeded={openUpgrade}
+   712→      />
+   713→
+   714→      <UpgradeModal
+   715→        open={upgradeOpen}
+   716→        onOpenChange={setUpgradeOpen}
+   717→        onUpgraded={handleUpgraded}
+   718→        onNeedAuth={() => setAuthOpen(true)}
+   719→      />
+   720→
+   721→      <AuthDialog
+   722→        open={authOpen}
+   723→        onOpenChange={setAuthOpen}
+   724→        onSuccess={() => {
+   725→          setAuthOpen(false);
+   726→          toast({
+   727→            title: "Bienvenue sur DzPharma Guide",
+   728→            description: "Votre compte médecin est actif (2 appareils maximum).",
+   729→          });
+   730→        }}
+   731→      />
+   732→
+   733→      <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} />
+   734→
+   735→      <RoadmapDialog open={roadmapOpen} onOpenChange={setRoadmapOpen} />
+   736→    </div>
+   737→  );
+   738→}
+   739→
