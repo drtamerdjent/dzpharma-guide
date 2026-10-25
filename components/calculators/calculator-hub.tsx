@@ -46,16 +46,17 @@ import type {
 import { CalculatorRunner } from "./calculator-runner";
 
 interface CalculatorHubProps {
-  onFindAlternatives: (dci: string, label?: string) => void;
   isPremium: boolean;
   onUpgrade: () => void;
+  onFindAlternatives: (dci: string, label?: string) => void;
 }
 
 /**
- * Freemium : 5 scores d'urgence / quotidien gratuits (CURB-65, Centor,
- * Glasgow, APGAR, EVA) ; les 5 scores de risque spécialistes (Wells,
- * CHA₂DS₂-VASc, HAS-BLED, Framingham, CRB-65) sont réservés aux membres
- * Premium (aperçu visible, calcul débloqué par l'abonnement).
+ * Séparation freemium des 10 scores :
+ *  - GRATUITS : CURB-65, Centor, Glasgow, APGAR, EVA (quotidien / urgences) ;
+ *  - PREMIUM  : Wells, CHA₂DS₂-VASc, HAS-BLED, Framingham, CRB-65 (scores
+ *    de risque spécialisés). Les scores verrouillés restent visibles avec un
+ *    panneau d'incitation (teaser) qui ouvre la fenêtre d'abonnement.
  */
 const PREMIUM_SCORE_IDS = new Set<string>([
   "wells",
@@ -84,10 +85,15 @@ function ScoreIcon({ id }: { id: string }) {
   return <Icon className="h-4 w-4" aria-hidden />;
 }
 
-export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: CalculatorHubProps) {
+export function CalculatorHub({
+  isPremium,
+  onUpgrade,
+  onFindAlternatives,
+}: CalculatorHubProps) {
   const [selectedId, setSelectedId] = useState<string>(CALCULATORS[0].id);
   const runnerRef = useRef<HTMLDivElement | null>(null);
 
+  /** Score verrouillé = réservé Premium et compte gratuit. */
   const isScoreLocked = (id: string) => !isPremium && PREMIUM_SCORE_IDS.has(id);
 
   /** Scores groupés par spécialité (ordre du registre = pertinence cabinet). */
@@ -139,11 +145,6 @@ export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: Calc
                     type="button"
                     onClick={() => selectScore(calculator.id)}
                     aria-pressed={isSelected}
-                    aria-label={
-                      isScoreLocked(calculator.id)
-                        ? `${calculator.name} — réservé aux membres Premium`
-                        : undefined
-                    }
                     className={`relative flex h-full w-full flex-col items-start gap-1 rounded-xl border-2 p-2.5 text-left transition-all duration-200 ${
                       isSelected
                         ? "border-sky-500 bg-sky-50 shadow-sm"
@@ -151,14 +152,9 @@ export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: Calc
                     }`}
                   >
                     {isScoreLocked(calculator.id) && (
-                      <span
-                        className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5"
-                        aria-hidden
-                      >
-                        <Crown className="h-2.5 w-2.5 text-amber-600" />
-                        <span className="text-[8px] font-extrabold uppercase tracking-wide text-amber-700">
-                          Pro
-                        </span>
+                      <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700">
+                        <Crown className="h-2.5 w-2.5" aria-hidden />
+                        Pro
                       </span>
                     )}
                     <span
@@ -218,14 +214,15 @@ export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: Calc
                             <ScoreIcon id={calculator.id} />
                           </span>
                           <span className="min-w-0 flex-1 truncate">{calculator.name}</span>
-                          {isScoreLocked(calculator.id) ? (
+                          {isScoreLocked(calculator.id) && (
                             <Crown
-                              className="h-3.5 w-3.5 shrink-0 text-amber-500"
-                              aria-label="Réservé aux membres Premium"
+                              className="h-3 w-3 shrink-0 text-amber-500"
+                              aria-label="Réservé Premium"
                             />
-                          ) : isSelected ? (
+                          )}
+                          {isSelected && (
                             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-sky-500" aria-hidden />
-                          ) : null}
+                          )}
                         </button>
                       </li>
                     );
@@ -259,43 +256,50 @@ export function CalculatorHub({ onFindAlternatives, isPremium, onUpgrade }: Calc
             </div>
 
             {isScoreLocked(selected.id) ? (
-              /* --------- Score Premium verrouillé (aperçu + CTA) --------- */
-              <div className="rounded-xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white p-5 text-center">
-                <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
-                  <Crown className="h-6 w-6 text-amber-600" aria-hidden />
+              /* Teaser Premium — le score reste lisible, le calcul est bloqué */
+              <div className="rounded-xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white p-4 text-center sm:p-6">
+                <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                  <Crown className="h-5 w-5" aria-hidden />
                 </span>
-                <p className="mt-3 text-sm font-extrabold text-slate-900">
+                <h3 className="pt-3 text-base font-extrabold text-slate-900">
                   Score réservé aux membres Premium
+                </h3>
+                <p className="mx-auto max-w-sm pt-1 text-xs leading-relaxed text-slate-500">
+                  Débloquez ce score et 4 autres outils de stratification du
+                  risque avec DzPharma Premium.
                 </p>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Débloquez <span className="font-semibold text-slate-700">{selected.name}</span> et
-                  les autres scores de risque spécialistes pour affiner vos
-                  décisions thérapeutiques.
-                </p>
-                <ul className="mx-auto mt-3 max-w-xs list-none space-y-1 text-left">
-                  {["Les 10 scores cliniques sans limite", "Outil d'aide à la décision au complet", "Activation en 24 h via BaridiMob"].map(
-                    (benefit) => (
-                      <li
-                        key={benefit}
-                        className="flex items-start gap-1.5 text-xs text-slate-600"
-                      >
-                        <CheckCircle2
-                          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
-                          aria-hidden
-                        />
-                        {benefit}
-                      </li>
-                    )
-                  )}
+                <ul className="mx-auto mt-3 max-w-sm list-none space-y-1.5 text-left">
+                  <li className="flex items-start gap-2 text-xs text-slate-600">
+                    <CheckCircle2
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500"
+                      aria-hidden
+                    />
+                    Wells, CHA₂DS₂-VASc, HAS-BLED, Framingham et CRB-65 débloqués
+                  </li>
+                  <li className="flex items-start gap-2 text-xs text-slate-600">
+                    <CheckCircle2
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500"
+                      aria-hidden
+                    />
+                    Vérificateur d&apos;interactions et contre-indications complet
+                  </li>
+                  <li className="flex items-start gap-2 text-xs text-slate-600">
+                    <CheckCircle2
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500"
+                      aria-hidden
+                    />
+                    Alternatives thérapeutiques illimitées
+                  </li>
                 </ul>
                 <Button
+                  type="button"
                   onClick={onUpgrade}
-                  className="mt-4 h-11 w-full gap-2 bg-amber-500 text-base font-bold text-white hover:bg-amber-600"
+                  className="mt-4 h-11 w-full bg-amber-500 text-white hover:bg-amber-600 sm:w-auto"
                 >
-                  <Crown className="h-4 w-4" aria-hidden />
+                  <Crown className="mr-1.5 h-4 w-4" aria-hidden />
                   Débloquer avec Premium — 3 600 DZD / an
                 </Button>
-                <p className="mt-2 text-[10px] text-slate-400">
+                <p className="pt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">
                   Paiement BaridiMob • Activation rapide via WhatsApp
                 </p>
               </div>
