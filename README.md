@@ -1,4 +1,3 @@
-
 # DzPharma Guide 🇩🇿💊
 
 Mobile-first freemium web app for Algerian doctors: search 5,380 medications,
