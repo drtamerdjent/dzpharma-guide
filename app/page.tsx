@@ -689,9 +689,9 @@ export default function HomePage() {
 
           <TabsContent value="scores" className="mt-4">
             <CalculatorHub
-              onFindAlternatives={handleFindAlternativesFromTool}
               isPremium={premium}
               onUpgrade={openUpgrade}
+              onFindAlternatives={handleFindAlternativesFromTool}
             />
           </TabsContent>
 
@@ -708,8 +708,8 @@ export default function HomePage() {
       {/* ---------------- Footer (sticky bottom via flex layout) ---------------- */}
       <footer className="mt-auto border-t border-slate-200 bg-white">
         <div className="mx-auto w-full max-w-5xl px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="flex flex-col items-center justify-between gap-2 text-xs text-slate-400 sm:flex-row">
-            <p className="text-center sm:text-left">
+          <div className="text-center text-xs text-slate-400 sm:text-left">
+            <p>
               <span className="font-semibold text-slate-600">DzPharma Guide</span>{" "}
               — © {new Date().getFullYear()}
             </p>
