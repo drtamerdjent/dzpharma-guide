@@ -27,7 +27,7 @@ export const metadata: Metadata = {
   ],
   applicationName: "DzPharma Guide",
   icons: {
-    icon: "/logo.svg",
+    icon: "/logo.svg?v=2",
   },
 };
 
