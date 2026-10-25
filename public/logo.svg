@@ -1,33 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  DzPharma Guide — favicon / logo
-  Capsule pharmaceutique inclinée sur fond bleu médical (couleur de l'app).
-  Remplace l'ancien logo générique. Affiché comme icône d'onglet du navigateur.
+  DzPharma Guide — favicon
+  Réplique exacte du logo d'en-tête de l'app : stéthoscope blanc (icône Lucide)
+  sur carré arrondi bleu médical (#0ea5e9 = bg-primary).
+  Affiché comme icône d'onglet du navigateur.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DzPharma Guide">
-  <defs>
-    <linearGradient id="dzp-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0ea5e9"/>
-      <stop offset="1" stop-color="#0284c7"/>
-    </linearGradient>
-  </defs>
+  <!-- Carré arrondi bleu médical (même badge que l'en-tête) -->
+  <rect width="64" height="64" rx="16" fill="#0ea5e9"/>
 
-  <!-- Fond arrondi -->
-  <rect width="64" height="64" rx="14" fill="url(#dzp-bg)"/>
-
-  <!-- Capsule inclinée (moitié blanche = médicament, moitié claire = générique) -->
-  <g transform="rotate(-45 32 32)">
-    <rect x="15" y="23" width="34" height="18" rx="9" fill="#ffffff"/>
-    <path d="M32 23 h8 a9 9 0 0 1 0 18 h-8 z" fill="#bae6fd"/>
-    <line x1="32" y1="23" x2="32" y2="41" stroke="#0284c7" stroke-width="1.6" opacity="0.35"/>
-
-    <!-- Reflet discret -->
-    <rect x="37" y="26" width="2.4" height="12" rx="1.2" fill="#ffffff" opacity="0.55"/>
-  </g>
-
-  <!-- Croix de la pharmacie, droite (centre de la moitié blanche après rotation) -->
-  <g transform="translate(26 38)">
-    <rect x="-5" y="-1.7" width="10" height="3.4" rx="1.7" fill="#0369a1"/>
-    <rect x="-1.7" y="-5" width="3.4" height="10" rx="1.7" fill="#0369a1"/>
+  <!-- Stéthoscope Lucide, blanc, centré (24 → 36 unités, échelle 1.5) -->
+  <g transform="translate(14 14) scale(1.5)"
+     fill="none" stroke="#ffffff" stroke-width="2.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 2v2"/>
+    <path d="M5 2v2"/>
+    <path d="M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1"/>
+    <path d="M8 15a6 6 0 0 0 12 0v-3"/>
+    <circle cx="20" cy="10" r="2"/>
   </g>
 </svg>
